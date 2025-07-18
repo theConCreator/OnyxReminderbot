@@ -215,8 +215,8 @@ async def main():
     await application.run_polling()
 
 if __name__ == '__main__':
-    # Запускаем main() в цикле событий с использованием asyncio.create_task
-    asyncio.create_task(main())
+    # Запускаем основной процесс с помощью asyncio.run()
+    asyncio.run(main())
 
 
 
