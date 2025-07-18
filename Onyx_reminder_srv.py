@@ -217,7 +217,10 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start), CallbackQueryHandler(start_menu_handler, pattern="^(new_reminder|list_reminders|back_to_menu)$")],
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(start_menu_handler, pattern="^(new_reminder|list_reminders|back_to_menu)$")
+        ],
         states={
             START_MENU: [
                 CallbackQueryHandler(start_menu_handler, pattern="^(new_reminder|list_reminders|back_to_menu)$"),
@@ -233,15 +236,20 @@ def main():
                 CallbackQueryHandler(start_menu_handler, pattern="^back_to_menu$")
             ],
         },
-        fallbacks=[],
+        fallbacks=[
+            CommandHandler("start", start)  # 👈 добавили сюда
+        ],
         per_message=False,
     )
 
     app.add_handler(conv_handler)
+
+    # Глобальный обработчик неизвестных команд
     app.add_handler(MessageHandler(filters.COMMAND, unknown))
 
     print("Bot started...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
