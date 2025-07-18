@@ -6,7 +6,7 @@ import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder,
+    Application,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
@@ -191,71 +191,29 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton(f"{text} в {dt.strftime('%H:%M')}", callback_data=f"view_{rid}")]
-        for rid, text, dt, _ in rows
+        for rid, text, dt, effect in rows
     ])
-    await msg.reply_text("📋 Ваши напоминания:", reply_markup=kb)
-    return ConversationHandler.END
+    await msg.reply_text("📝 Ваши напоминания:", reply_markup=kb)
 
-async def reminder_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    rid = int(query.data.split("_", 1)[1])
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("❌ Удалить", callback_data=f"delete_{rid}")],
-        [InlineKeyboardButton("↩️ Назад", callback_data="back")]
-    ])
-    await query.edit_message_text("Выберите действие:", reply_markup=kb)
+# === Main function ===
 
-async def delete_rem(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer("Удалено.")
-    rid = int(query.data.split("_", 1)[1])
-    with sqlite3.connect(DB_FILE) as conn:
-        conn.execute("DELETE FROM reminders WHERE id=?", (rid,))
-        conn.commit()
-    await query.edit_message_text("❌ Напоминание удалено.", reply_markup=start_menu)
-
-async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await query.edit_message_text("Главное меню:", reply_markup=start_menu)
-
-# Optional: fallback to cancel conversation
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Отмена.")
-    return ConversationHandler.END
-
-# === Main ===
 async def main():
     init_db()
+    application = Application.builder().token(TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(handle_start_menu))
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("new", new_reminder), MessageHandler(filters.TEXT, get_text)],
+        states={GET_TEXT: [MessageHandler(filters.TEXT, get_text)],
+                GET_TIME: [MessageHandler(filters.TEXT, get_time)],
+                GET_EFFECT: [CallbackQueryHandler(get_effect)]},
+        fallbacks=[],
+    ))
+
     scheduler.start()
-    app = ApplicationBuilder().token(TOKEN).build()
-
-    conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(handle_start_menu, pattern="^(new|list)$"),
-            CommandHandler("start", start),
-            MessageHandler(filters.Regex("^📝 Новое$"), new_reminder),
-            MessageHandler(filters.Regex("^📋 Список$"), list_reminders),
-        ],
-        states={
-            GET_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_text)],
-            GET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_time)],
-            GET_EFFECT: [CallbackQueryHandler(get_effect, pattern="^effect_")]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-        # per_chat=True  # убрал этот параметр, он не нужен и вызовет ошибку
-    )
-
-    app.add_handler(conv)
-    app.add_handler(CallbackQueryHandler(reminder_action, pattern="^view_"))
-    app.add_handler(CallbackQueryHandler(delete_rem, pattern="^delete_"))
-    app.add_handler(CallbackQueryHandler(back_to_menu, pattern="^back$"))
-
-    logger.info("Bot started")
-    await app.run_polling()
+    await application.run_polling()
 
 if __name__ == '__main__':
     asyncio.run(main())
-
 
