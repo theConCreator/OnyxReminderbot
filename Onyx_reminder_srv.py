@@ -16,7 +16,7 @@ import dateparser
 from datetime import datetime
 
 # === Настройки ===
-BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Установи в Render переменную окружения
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Установи в Render переменную окружения
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
