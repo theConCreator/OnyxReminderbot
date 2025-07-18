@@ -5,7 +5,15 @@ import logging
 import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, ContextTypes, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters
+)
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 
@@ -185,7 +193,8 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"{text} в {dt.strftime('%H:%M')}", callback_data=f"view_{rid}")]
         for rid, text, dt, effect in rows
     ])
-    await msg.reply_text
+    await msg.reply_text("📝 Ваши напоминания:", reply_markup=kb)
+
 
 # === Main function ===
 
@@ -208,5 +217,4 @@ await application.run_polling()
 
 if __name__ == '__main__':
 asyncio.run(main())
-
 
