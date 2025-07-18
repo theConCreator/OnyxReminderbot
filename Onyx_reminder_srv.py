@@ -169,7 +169,10 @@ async def get_effect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async def job():
         await context.bot.send_message(user_id, f"{effect} Напоминание: {text}")
 
-    scheduler.add_job(job, 'date', run_date=dt)
+    def job_wrapper():
+        asyncio.create_task(job())
+
+    scheduler.add_job(job_wrapper, 'date', run_date=dt)
     await query.edit_message_text("✅ Напоминание установлено!")
     return ConversationHandler.END
 
@@ -217,6 +220,11 @@ async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     await query.edit_message_text("Главное меню:", reply_markup=start_menu)
 
+# Optional: fallback to cancel conversation
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Отмена.")
+    return ConversationHandler.END
+
 # === Main ===
 async def main():
     init_db()
@@ -235,8 +243,8 @@ async def main():
             GET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_time)],
             GET_EFFECT: [CallbackQueryHandler(get_effect, pattern="^effect_")]
         },
-        fallbacks=[],
-        per_chat=True
+        fallbacks=[CommandHandler("cancel", cancel)]
+        # per_chat=True  # убрал этот параметр, он не нужен и вызовет ошибку
     )
 
     app.add_handler(conv)
@@ -248,7 +256,6 @@ async def main():
     await app.run_polling()
 
 if __name__ == '__main__':
-    import asyncio
     asyncio.run(main())
 
 
