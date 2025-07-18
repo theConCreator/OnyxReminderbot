@@ -2,6 +2,7 @@ import os
 import logging
 import sqlite3
 import re
+import asyncio  # Добавлен импорт asyncio
 from datetime import datetime, timedelta
 from telegram import (
     Update,
@@ -238,7 +239,6 @@ async def main():
     nest_asyncio.apply()
     init_db()
     scheduler.start()
-
     app = ApplicationBuilder().token(TOKEN).build()
 
     conv = ConversationHandler(
@@ -267,5 +267,4 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-
 
