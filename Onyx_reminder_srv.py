@@ -1,68 +1,52 @@
 import os
-import logging
 import re
+import asyncio
+import logging
 from datetime import datetime, timedelta
+from threading import Thread
+
+from flask import Flask
+from apscheduler.schedulers.background import BackgroundScheduler
 from telegram import (
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    Update,
-    ReplyKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardRemove,
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 )
 from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
-    CommandHandler,
-    CallbackQueryHandler,
-    ConversationHandler,
-    MessageHandler,
-    filters,
+    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
+    MessageHandler, filters, ContextTypes, ConversationHandler
 )
-import asyncio
+from dotenv import load_dotenv
 
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
-)
+load_dotenv()
 
-logger = logging.getLogger(__name__)
+TOKEN = os.getenv("BOT_TOKEN")
+PORT = int(os.environ.get("PORT", 10000))
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+logging.basicConfig(level=logging.INFO)
 
-# Этапы разговора
-(
-    START_MENU,
-    INPUT_DESCRIPTION,
-    INPUT_TIME,
-    SHOW_REMINDERS,
-    CONFIRM_DELETE,
-) = range(5)
+# Flask app for fake port binding
+flask_app = Flask(__name__)
 
-reminders = {}  # {user_id: [{'desc': str, 'time': datetime, 'job_id': str}]}
+@flask_app.route('/')
+def home():
+    return "Bot is alive!"
 
-# Главное меню с кнопками
-def get_main_menu():
-    keyboard = [
-        [InlineKeyboardButton("➕ Новое напоминание", callback_data="new_reminder")],
-        [InlineKeyboardButton("📋 Список напоминаний", callback_data="list_reminders")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
+def run_flask():
+    flask_app.run(host='0.0.0.0', port=PORT)
 
-# Кнопка отмены для ввода описания
-def get_cancel_keyboard():
-    keyboard = [[KeyboardButton("❌ Отмена")]]
-    return ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
+# Scheduler
+scheduler = BackgroundScheduler()
+scheduler.start()
 
-# Кнопки для времени отмены (скрываем кнопки)
-def get_remove_keyboard():
-    return ReplyKeyboardRemove()
+# In-memory store
+user_reminders = {}
 
-# Функция парсинга времени (упрощённая, можно расширять)
+# States
+ASK_DESCRIPTION, ASK_TIME = range(2)
+
 def parse_time_string(s: str) -> datetime | None:
     s = s.strip().lower()
     now = datetime.now()
 
-    # Паттерны для "через N минут/часов/дней"
     patterns = [
         (r"через\s+(\d+)\s*(дней|дня|дн)", 'days'),
         (r"через\s+(\d+)\s*(часов|часа|ч)", 'hours'),
@@ -77,7 +61,6 @@ def parse_time_string(s: str) -> datetime | None:
             val = int(m.group(1))
             return now + timedelta(**{unit: val})
 
-    # Формат HH:MM
     m = re.match(r"^(\d{1,2}):(\d{2})$", s)
     if m:
         hr, mn = map(int, m.groups())
@@ -88,168 +71,105 @@ def parse_time_string(s: str) -> datetime | None:
 
     return None
 
-# Стартовое сообщение и меню
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message:
-        await update.message.reply_text(
-            "Привет! Выбери действие:",
-            reply_markup=get_main_menu()
-        )
-    else:
-        await update.callback_query.answer()
-        await update.callback_query.message.edit_text(
-            "Привет! Выбери действие:",
-            reply_markup=get_main_menu()
-        )
-    return START_MENU
+    keyboard = [
+        [InlineKeyboardButton("➕ Новое напоминание", callback_data="new_reminder")],
+        [InlineKeyboardButton("📋 Мои напоминания", callback_data="list_reminders")]
+    ]
+    await update.message.reply_text(
+        "👋 Добро пожаловать! Выберите действие:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-# Обработка нажатий главного меню
-async def start_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     if query.data == "new_reminder":
+        keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_creation")]]
         await query.message.reply_text(
-            "Отправь описание напоминания:",
-            reply_markup=get_cancel_keyboard()
+            "✏️ Введите описание напоминания:",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        return INPUT_DESCRIPTION
-
+        return ASK_DESCRIPTION
     elif query.data == "list_reminders":
         user_id = query.from_user.id
-        user_reminders = reminders.get(user_id, [])
+        reminders = user_reminders.get(user_id, [])
+        if not reminders:
+            await query.message.reply_text("🗒 У вас пока нет напоминаний.")
+        else:
+            buttons = [
+                [InlineKeyboardButton(f"🗑 {text}", callback_data=f"del_{i}")]
+                for i, (text, _) in enumerate(reminders)
+            ]
+            await query.message.reply_text("Ваши напоминания:", reply_markup=InlineKeyboardMarkup(buttons))
+        return ConversationHandler.END
+    elif query.data.startswith("del_"):
+        idx = int(query.data.split("_")[1])
+        user_id = query.from_user.id
+        if user_id in user_reminders and idx < len(user_reminders[user_id]):
+            removed = user_reminders[user_id].pop(idx)
+            await query.message.reply_text(f"✅ Напоминание удалено: {removed[0]}")
+        return ConversationHandler.END
+    elif query.data == "cancel_creation":
+        await query.message.reply_text("❌ Создание напоминания отменено.", reply_markup=ReplyKeyboardRemove())
+        return ConversationHandler.END
 
-        if not user_reminders:
-            await query.message.edit_text(
-                "У тебя пока нет напоминаний.",
-                reply_markup=get_main_menu()
-            )
-            return START_MENU
+async def receive_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["reminder_text"] = update.message.text
+    await update.message.reply_text("⏰ Теперь укажите время (например, `через 10 минут` или `14:30`):",
+                                    reply_markup=ReplyKeyboardRemove())
+    return ASK_TIME
 
-        # Создаем кнопки с напоминаниями для удаления
-        buttons = [
-            [InlineKeyboardButton(f"{idx+1}. {r['desc']} - {r['time'].strftime('%Y-%m-%d %H:%M')}", callback_data=f"del_{idx}")]
-            for idx, r in enumerate(user_reminders)
-        ]
-        buttons.append([InlineKeyboardButton("⬅️ Назад", callback_data="back_to_menu")])
-        await query.message.edit_text(
-            "Твои напоминания (нажми чтобы удалить):",
-            reply_markup=InlineKeyboardMarkup(buttons)
-        )
-        return SHOW_REMINDERS
+async def receive_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reminder_text = context.user_data.get("reminder_text")
+    reminder_time = parse_time_string(update.message.text)
+    if not reminder_time:
+        await update.message.reply_text("❗️Не удалось распознать время. Попробуйте снова.")
+        return ASK_TIME
 
-    elif query.data == "back_to_menu":
-        await query.message.edit_text(
-            "Выбери действие:",
-            reply_markup=get_main_menu()
-        )
-        return START_MENU
-
-# Отмена ввода описания
-async def cancel_input_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    if text == "❌ Отмена":
-        await update.message.reply_text(
-            "Создание напоминания отменено.",
-            reply_markup=get_main_menu()
-        )
-        return START_MENU
-    else:
-        # Если не отмена — это описание
-        context.user_data['description'] = text
-        await update.message.reply_text(
-            "Введите время напоминания.\nПримеры:\n- через 10 минут\n- 14:30\n- через 2 часа",
-            reply_markup=get_remove_keyboard()
-        )
-        return INPUT_TIME
-
-# Ввод времени напоминания
-async def input_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    dt = parse_time_string(text)
-    if not dt:
-        await update.message.reply_text(
-            "Не смог распознать время. Попробуй еще раз.\nПример: через 10 минут, 14:30, через 2 часа"
-        )
-        return INPUT_TIME
-
-    desc = context.user_data.get('description')
     user_id = update.message.from_user.id
+    user_reminders.setdefault(user_id, []).append((reminder_text, reminder_time))
 
-    # Сохраняем напоминание
-    reminder = {'desc': desc, 'time': dt}
-    reminders.setdefault(user_id, []).append(reminder)
-
-    await update.message.reply_text(
-        f"Напоминание сохранено:\n«{desc}» в {dt.strftime('%Y-%m-%d %H:%M')}",
-        reply_markup=get_main_menu()
+    scheduler.add_job(
+        lambda: asyncio.run(send_reminder(context, user_id, reminder_text)),
+        trigger='date', run_date=reminder_time
     )
-    return START_MENU
 
-# Удаление напоминания по кнопке
-async def delete_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    user_reminders = reminders.get(user_id, [])
+    await update.message.reply_text(f"✅ Напоминание установлено: \"{reminder_text}\" в {reminder_time.strftime('%H:%M %d.%m')}")
+    return ConversationHandler.END
 
-    # Индекс напоминания в callback_data: del_0, del_1 ...
-    idx = int(query.data.split('_')[1])
-
-    if 0 <= idx < len(user_reminders):
-        removed = user_reminders.pop(idx)
-        await query.message.edit_text(
-            f"Удалено напоминание:\n«{removed['desc']}»",
-            reply_markup=get_main_menu()
-        )
-    else:
-        await query.message.edit_text(
-            "Ошибка: напоминание не найдено.",
-            reply_markup=get_main_menu()
-        )
-
-    return START_MENU
+async def send_reminder(context: ContextTypes.DEFAULT_TYPE, user_id: int, text: str):
+    try:
+        await context.bot.send_message(chat_id=user_id, text=f"🔔 Напоминание: {text}")
+    except Exception as e:
+        logging.error(f"Ошибка при отправке напоминания: {e}")
 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Я не понимаю эту команду.")
+    await update.message.reply_text("🤖 Извините, я не понимаю эту команду.")
 
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    Thread(target=run_flask).start()
+
+    application = ApplicationBuilder().token(TOKEN).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("start", start),
-            CallbackQueryHandler(start_menu_handler, pattern="^(new_reminder|list_reminders|back_to_menu)$")
-        ],
+        entry_points=[CallbackQueryHandler(handle_menu)],
         states={
-            START_MENU: [
-                CallbackQueryHandler(start_menu_handler, pattern="^(new_reminder|list_reminders|back_to_menu)$"),
+            ASK_DESCRIPTION: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_description),
+                CallbackQueryHandler(handle_menu, pattern="^cancel_creation$")
             ],
-            INPUT_DESCRIPTION: [
-                MessageHandler(filters.TEXT & (~filters.COMMAND), cancel_input_description)
-            ],
-            INPUT_TIME: [
-                MessageHandler(filters.TEXT & (~filters.COMMAND), input_time)
-            ],
-            SHOW_REMINDERS: [
-                CallbackQueryHandler(delete_reminder, pattern="^del_\\d+$"),
-                CallbackQueryHandler(start_menu_handler, pattern="^back_to_menu$")
-            ],
+            ASK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_time)],
         },
-        fallbacks=[
-            CommandHandler("start", start)  # 👈 добавили сюда
-        ],
-        per_message=False,
+        fallbacks=[]
     )
 
-    app.add_handler(conv_handler)
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(conv_handler)
+    application.add_handler(CallbackQueryHandler(handle_menu))
+    application.add_handler(MessageHandler(filters.COMMAND, unknown))
 
-    # Глобальный обработчик неизвестных команд
-    app.add_handler(MessageHandler(filters.COMMAND, unknown))
-
-    print("Bot started...")
-    app.run_polling()
-
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
