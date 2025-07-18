@@ -188,31 +188,33 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rows.append((rid, text, datetime.fromisoformat(t), effect))
     if not rows:
         await msg.reply_text("📭 Напоминаний нет.", reply_markup=start_menu)
-return ConversationHandler.END
-kb = InlineKeyboardMarkup([
-[InlineKeyboardButton(f"{text} в {dt.strftime('%H:%M')}", callback_data=f"view_{rid}")]
-for rid, text, dt, effect in rows
-])
-await msg.reply_text("📝 Ваши напоминания:", reply_markup=kb)
+        return ConversationHandler.END
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"{text} в {dt.strftime('%H:%M')}", callback_data=f"view_{rid}")]
+        for rid, text, dt, effect in rows
+    ])
+    await msg.reply_text("📝 Ваши напоминания:", reply_markup=kb)
+
 # === Main function ===
 
 async def main():
-	init_db()
-	application = Application.builder().token(TOKEN).build()
+    init_db()
+    application = Application.builder().token(TOKEN).build()
 
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CallbackQueryHandler(handle_start_menu))
-application.add_handler(ConversationHandler(
-    entry_points=[CommandHandler("new", new_reminder), MessageHandler(filters.TEXT, get_text)],
-    states={GET_TEXT: [MessageHandler(filters.TEXT, get_text)],
-            GET_TIME: [MessageHandler(filters.TEXT, get_time)],
-            GET_EFFECT: [CallbackQueryHandler(get_effect)]},
-    fallbacks=[],
-))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(handle_start_menu))
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("new", new_reminder), MessageHandler(filters.TEXT, get_text)],
+        states={GET_TEXT: [MessageHandler(filters.TEXT, get_text)],
+                GET_TIME: [MessageHandler(filters.TEXT, get_time)],
+                GET_EFFECT: [CallbackQueryHandler(get_effect)]},
+        fallbacks=[],
+    ))
 
-scheduler.start()
-await application.run_polling()
+    scheduler.start()
+    await application.run_polling()
 
-if name == 'main':
-	asyncio.run(main())
+if __name__ == '__main__':
+    asyncio.run(main())
+
 
