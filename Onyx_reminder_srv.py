@@ -195,7 +195,7 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await msg.reply_text("📝 Ваши напоминания:", reply_markup=kb)
 
-# === Main function  ===
+# === Main function ===
 
 async def main():
     init_db()
@@ -215,6 +215,8 @@ async def main():
     await application.run_polling()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    # Убираем asyncio.run() для Render
+    main()
+
 
 
