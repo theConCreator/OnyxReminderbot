@@ -2,7 +2,6 @@ import os
 import logging
 import sqlite3
 import re
-import asyncio  # Добавлен импорт asyncio
 from datetime import datetime, timedelta
 from telegram import (
     Update,
@@ -24,7 +23,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import nest_asyncio
 
 # === CONFIG ===
-TOKEN = os.getenv("BOT_TOKEN")  # Токен берется из переменной окружения
+TOKEN = os.getenv("BOT_TOKEN")
 DB_FILE = "reminders.db"
 
 # === LOGGING ===
@@ -49,7 +48,6 @@ persistent_kb = ReplyKeyboardMarkup(
 )
 
 # === DATABASE ===
-
 def init_db():
     with sqlite3.connect(DB_FILE) as conn:
         conn.execute(
@@ -65,7 +63,6 @@ def init_db():
         )
 
 # === SAVE ===
-
 def save_reminder(user_id, text, iso_time, effect):
     with sqlite3.connect(DB_FILE) as conn:
         cur = conn.execute(
@@ -76,15 +73,11 @@ def save_reminder(user_id, text, iso_time, effect):
         return cur.lastrowid
 
 # === TIME PARSING ===
-
 def parse_time_string(s: str) -> datetime | None:
     s = s.strip().lower()
     now = datetime.now()
 
     # 1. (DATE WITHOUT TIME NOT SUPPORTED HERE)  
-    # Skip date-only, require time component
-
-    # 2. Relative Russian/English: через X дней/days, часов/hours, минут/minutes
     patterns = [
         (r"через\s+(\d+)\s*(дней|дня|дн)", 'days'),
         (r"через\s+(\d+)\s*(часов|часа|ч)", 'hours'),
@@ -116,7 +109,6 @@ def parse_time_string(s: str) -> datetime | None:
     return None
 
 # === HANDLERS ===
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Что вы хотите сделать?",
