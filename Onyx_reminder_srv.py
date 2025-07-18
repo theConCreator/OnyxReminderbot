@@ -16,6 +16,7 @@ from telegram.ext import (
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
+import aiosqlite  # Используем асинхронный SQLite
 
 # === Load env vars ===
 load_dotenv()
@@ -44,9 +45,9 @@ persistent_kb = ReplyKeyboardMarkup(
 )
 
 # === DB init ===
-def init_db():
-    with sqlite3.connect(DB_FILE) as conn:
-        conn.execute(
+async def init_db():
+    async with aiosqlite.connect(DB_FILE) as db:
+        await db.execute(
             """
             CREATE TABLE IF NOT EXISTS reminders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -57,16 +58,17 @@ def init_db():
             )
             """
         )
+        await db.commit()
 
 # === Save to DB ===
-def save_reminder(user_id, text, iso_time, effect):
-    with sqlite3.connect(DB_FILE) as conn:
-        cur = conn.execute(
+async def save_reminder(user_id, text, iso_time, effect):
+    async with aiosqlite.connect(DB_FILE) as db:
+        cursor = await db.execute(
             "INSERT INTO reminders (user_id, text, time, effect) VALUES (?, ?, ?, ?)",
             (user_id, text, iso_time, effect)
         )
-        conn.commit()
-        return cur.lastrowid
+        await db.commit()
+        return cursor.lastrowid
 
 # === Parse time input ===
 def parse_time_string(s: str) -> datetime | None:
@@ -164,7 +166,7 @@ async def get_effect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = context.user_data['text']
     dt = context.user_data['time']
     iso = dt.isoformat()
-    save_reminder(user_id, text, iso, effect)
+    await save_reminder(user_id, text, iso, effect)
 
     async def job():
         await context.bot.send_message(user_id, f"{effect} Напоминание: {text}")
@@ -183,9 +185,11 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = msg.chat.id
     now = datetime.now().isoformat()
     rows = []
-    with sqlite3.connect(DB_FILE) as conn:
-        for rid, text, t, effect in conn.execute("SELECT id,text,time,effect FROM reminders WHERE user_id=? AND time>? ORDER BY time", (user_id, now)):
-            rows.append((rid, text, datetime.fromisoformat(t), effect))
+    async with aiosqlite.connect(DB_FILE) as db:
+        async with db.execute("SELECT id,text,time,effect FROM reminders WHERE user_id=? AND time>? ORDER BY time", (user_id, now)) as cursor:
+            async for row in cursor:
+                rows.append((row[0], row[1], datetime.fromisoformat(row[2]), row[3]))
+
     if not rows:
         await msg.reply_text("📭 Напоминаний нет.", reply_markup=start_menu)
         return ConversationHandler.END
@@ -198,7 +202,7 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === Main function ===
 
 async def main():
-    init_db()
+    await init_db()
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -216,4 +220,5 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
+
 
