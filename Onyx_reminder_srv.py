@@ -1,7 +1,6 @@
-import asyncio
-import sqlite3
-import logging
 import os
+import logging
+import sqlite3
 import re
 from datetime import datetime, timedelta
 from telegram import (
@@ -24,7 +23,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import nest_asyncio
 
 # === CONFIG ===
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")  # Токен берется из переменной окружения
 DB_FILE = "reminders.db"
 
 # === LOGGING ===
@@ -81,7 +80,10 @@ def parse_time_string(s: str) -> datetime | None:
     s = s.strip().lower()
     now = datetime.now()
 
-    # 1. Relative Russian/English
+    # 1. (DATE WITHOUT TIME NOT SUPPORTED HERE)  
+    # Skip date-only, require time component
+
+    # 2. Relative Russian/English: через X дней/days, часов/hours, минут/minutes
     patterns = [
         (r"через\s+(\d+)\s*(дней|дня|дн)", 'days'),
         (r"через\s+(\d+)\s*(часов|часа|ч)", 'hours'),
@@ -96,7 +98,7 @@ def parse_time_string(s: str) -> datetime | None:
             val = int(m.group(1))
             return now + timedelta(**{unit: val})
 
-    # 2. Time only HH:MM
+    # 3. Time HH:MM
     m = re.match(r"^(\d{1,2}):(\d{2})$", s)
     if m:
         hr, mn = map(int, m.groups())
@@ -105,46 +107,18 @@ def parse_time_string(s: str) -> datetime | None:
             dt += timedelta(days=1)
         return dt
 
-    # 3. ISO: YYYY-MM-DD HH:MM
+    # 4. Full date 'YYYY-MM-DD HH:MM'
     m = re.match(r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})$", s)
     if m:
         return datetime.fromisoformat(f"{m.group(1)}T{m.group(2)}")
 
-    # 4. Natural language: 1 июня 14:30 or 1 june 14:30
-    month_names = {
-        # Russian
-        "января": 1, "февраля": 2, "марта": 3, "апреля": 4,
-        "мая": 5, "июня": 6, "июля": 7, "августа": 8,
-        "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
-        # English
-        "january": 1, "february": 2, "march": 3, "april": 4,
-        "may": 5, "june": 6, "july": 7, "august": 8,
-        "september": 9, "october": 10, "november": 11, "december": 12,
-    }
-
-    m = re.match(r"(\d{1,2})\s+([a-zа-яё]+)\s+(\d{1,2}):(\d{2})", s)
-    if m:
-        day, mon_str, hour, minute = m.groups()
-        month = month_names.get(mon_str)
-        if not month:
-            return None
-        try:
-            year = now.year
-            dt = datetime(year, month, int(day), int(hour), int(minute))
-            if dt < now:
-                dt = dt.replace(year=year + 1)
-            return dt
-        except ValueError:
-            return None
-
     return None
-
 
 # === HANDLERS ===
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Привет! Я - Onyx Reminder, что вы хотите сделать?",
+        "👋 Привет! Что вы хотите сделать?",
         reply_markup=start_menu
     )
 
@@ -152,39 +126,26 @@ async def handle_start_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if query.data == "new":
-        # Передаём весь update, чтобы new_reminder работал корректно
-        return await new_reminder(update, context)
-    else:
-        return await list_reminders(update, context)
+        return await new_reminder(query, context)
+    return await list_reminders(query, context)
 
 # ---- New reminder ----
 async def new_reminder(update, context: ContextTypes.DEFAULT_TYPE):
-    # Обрабатываем update или callback_query корректно
-    if isinstance(update, Update):
-        if update.callback_query:
-            msg = update.callback_query.message
-            await update.callback_query.answer()
-        else:
-            msg = update.message
+    if update.callback_query is not None:
+        msg = update.callback_query.message
+        await update.callback_query.answer()
     else:
-        # Если update - это уже callback_query (редко), можно попытаться так:
         msg = update.message
-        await context.bot.answer_callback_query(update.id)
     await msg.reply_text("✍️ Введите текст напоминания:", reply_markup=persistent_kb)
     return GET_TEXT
 
 async def get_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text_input = update.message.text.strip()
-    # Защита: если пользователь ввёл команду списка или нового вместо текста
+    text_input = update.message.text
     if text_input in ["📋 Список", "📝 Новое"]:
-        # Выполняем соответствующую команду вместо сохранения
-        if text_input == "📋 Список":
-            return await list_reminders(update, context)
-        elif text_input == "📝 Новое":
-            return await new_reminder(update, context)
+        return await list_reminders(update, context)
     context.user_data['text'] = text_input
     await update.message.reply_text(
-        "⏱ Введите время (например 1 июня 10:00, 14:30 (поставится на ближайшее), через 20 минут, in 2h, и т.д.):",
+        "⏱ Введите время (17 июня, через 20 минут, 14:30, in 2h):",
         reply_markup=persistent_kb
     )
     return GET_TIME
@@ -193,12 +154,11 @@ async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dt = parse_time_string(update.message.text)
     if not dt:
         await update.message.reply_text(
-            "❌ Не удалось распознать время или время указано без часов и минут. Попробуйте ещё раз:",
+            "❌ Не удалось распознать время. Попробуйте ещё раз:",
             reply_markup=persistent_kb
         )
         return GET_TIME
     context.user_data['time'] = dt
-    # 9 эмодзи эффектов
     effects = ["⏰","📌","🔥","🎯","💡","🚀","✅","📞","🧠"]
     rows = []
     for i in range(0, len(effects), 3):
@@ -222,17 +182,14 @@ async def get_effect(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(user_id, f"{effect} Напоминание: {text}")
 
     scheduler.add_job(job, 'date', run_date=dt)
-    # Используем InlineKeyboardMarkup с пустым списком, чтобы избежать ошибки "Inline keyboard expected"
-    await query.edit_message_text("✅ Напоминание установлено!", reply_markup=InlineKeyboardMarkup([]))
+    await query.edit_message_text("✅ Напоминание установлено!")
     return ConversationHandler.END
 
 # ---- List reminders ----
 async def list_reminders(update, context: ContextTypes.DEFAULT_TYPE):
-    if hasattr(update, "callback_query") and update.callback_query:
-        msg = update.callback_query.message
+    msg = update.callback_query.message if hasattr(update, 'callback_query') else update.message
+    if hasattr(update, 'callback_query'):
         await update.callback_query.answer()
-    else:
-        msg = update.message
     user_id = msg.chat.id
     now = datetime.now().isoformat()
     rows = []
@@ -243,11 +200,11 @@ async def list_reminders(update, context: ContextTypes.DEFAULT_TYPE):
         ):
             rows.append((rid, text, datetime.fromisoformat(t), effect))
     if not rows:
-        await msg.reply_text("📭 Активных напоминаний нет.", reply_markup=start_menu)
+        await msg.reply_text("📭 Активных нет.", reply_markup=start_menu)
         return ConversationHandler.END
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"{effect} {text} в {dt.strftime('%d.%m %H:%M')}", callback_data=f"view_{rid}")]
-        for rid, text, dt, effect in rows
+        [InlineKeyboardButton(f"{text} в {dt.strftime('%H:%M')}", callback_data=f"view_{rid}")]
+        for rid,text,dt,effect in rows
     ])
     await msg.reply_text("📋 Активные напоминания:", reply_markup=kb)
     return ConversationHandler.END
@@ -267,9 +224,9 @@ async def delete_rem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer("Удалено.")
     rid = int(query.data.split("_",1)[1])
     with sqlite3.connect(DB_FILE) as conn:
-        conn.execute("DELETE FROM reminders WHERE id=?", (rid,))
+        conn.execute("DELETE FROM reminders WHERE id=?",(rid,))
         conn.commit()
-    await query.edit_message_text("❌ Напоминание удалено.", reply_markup=start_menu)
+    await query.edit_message_text("❌ Удалено.", reply_markup=start_menu)
 
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -281,6 +238,7 @@ async def main():
     nest_asyncio.apply()
     init_db()
     scheduler.start()
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     conv = ConversationHandler(
@@ -295,7 +253,7 @@ async def main():
             GET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_time)],
             GET_EFFECT: [CallbackQueryHandler(get_effect, pattern="^effect_")],
         },
-        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        fallbacks=[CommandHandler("cancel", lambda u,c: ConversationHandler.END)],
         per_chat=True
     )
 
@@ -309,6 +267,5 @@ async def main():
 
 if __name__ == '__main__':
     asyncio.run(main())
-
 
 
