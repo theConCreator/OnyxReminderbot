@@ -216,7 +216,7 @@ async def main():
 
 if __name__ == '__main__':
     # Убираем asyncio.run() для Render
-    await main()
+    asyncio.run(main())
 
 
 
