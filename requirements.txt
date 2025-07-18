@@ -3,4 +3,5 @@ apscheduler==3.10.0
 python-dotenv==0.19.2
 flask
 dateparser==1.2.0
+nest_asyncio==1.5.6
 
