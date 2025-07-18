@@ -215,8 +215,9 @@ async def main():
     await application.run_polling()
 
 if __name__ == '__main__':
-    # Убираем asyncio.run() для Render
-    main()
+    # Запускаем main() в цикле событий с использованием asyncio.create_task
+    asyncio.create_task(main())
+
 
 
 
