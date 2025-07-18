@@ -2,4 +2,5 @@ python-telegram-bot==20.0
 apscheduler==3.10.0
 python-dotenv==0.19.2
 flask
+dateparser==1.2.0
 
