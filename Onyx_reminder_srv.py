@@ -1,140 +1,115 @@
+import threading
+import re
 import os
-import logging
-import asyncio
+from datetime import datetime, timedelta
 from flask import Flask, request
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, CallbackQueryHandler, ContextTypes,
-    MessageHandler, ConversationHandler, filters
-)
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.date import DateTrigger
-
-import dateparser
-from datetime import datetime
-
-# === Настройки ===
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Установи в Render переменную окружения
-
+# --- Flask для фейкового webhook ---
 app = Flask(__name__)
-logging.basicConfig(level=logging.INFO)
 
-# === Scheduler ===
-scheduler = AsyncIOScheduler()
-scheduler.start()
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    return "OK", 200
 
-# === Состояния ConversationHandler ===
-SET_REMINDER_TEXT, SET_REMINDER_TIME = range(2)
+def run_flask():
+    # Запускаем flask на 0.0.0.0:8080
+    app.run(host='0.0.0.0', port=8080)
 
-# Хранилище напоминаний
-user_reminders = {}
+# --- Функция для парсинга времени ---
+def parse_time_string(s: str) -> datetime | None:
+    s = s.strip().lower()
+    now = datetime.now()
 
-# === Команды ===
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("➕ Добавить напоминание", callback_data="add")],
-        [InlineKeyboardButton("📋 Мои напоминания", callback_data="list")]
+    patterns = [
+        (r"через\s+(\d+)\s*(дней|дня|дн)", 'days'),
+        (r"через\s+(\d+)\s*(часов|часа|ч)", 'hours'),
+        (r"через\s+(\d+)\s*(минут|минуты|мин|м)", 'minutes'),
+        (r"in\s+(\d+)\s*(days?|d)", 'days'),
+        (r"in\s+(\d+)\s*(hours?|h)", 'hours'),
+        (r"in\s+(\d+)\s*(minutes?|mins?|m)", 'minutes'),
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Привет! Что хочешь сделать?", reply_markup=reply_markup)
+    for patt, unit in patterns:
+        m = re.search(patt, s)
+        if m:
+            val = int(m.group(1))
+            return now + timedelta(**{unit: val})
 
-async def handle_start_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if query:
-        await query.answer()
-        if query.data == "add":
-            await query.edit_message_text("Введите текст напоминания:")
-            return SET_REMINDER_TEXT
-        elif query.data == "list":
-            user_id = query.from_user.id
-            reminders = user_reminders.get(user_id, [])
-            if reminders:
-                text = "Ваши напоминания:\n" + "\n".join(
-                    f"🔔 {text} — {time.strftime('%Y-%m-%d %H:%M')}"
-                    for text, time in reminders
-                )
-            else:
-                text = "У вас пока нет напоминаний."
-            await query.edit_message_text(text)
-    return ConversationHandler.END
+    m = re.match(r"^(\d{1,2}):(\d{2})$", s)
+    if m:
+        hr, mn = map(int, m.groups())
+        dt = now.replace(hour=hr, minute=mn, second=0, microsecond=0)
+        if dt < now:
+            dt += timedelta(days=1)
+        return dt
 
-async def receive_reminder_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['reminder_text'] = update.message.text
-    await update.message.reply_text("⏰ Когда напомнить? (например: 'через 10 минут', 'завтра в 9 утра')")
-    return SET_REMINDER_TIME
+    m = re.match(r"^(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\s+(\d{1,2}):(\d{2})$", s)
+    if m:
+        day = int(m.group(1))
+        month_str = m.group(2)
+        hour = int(m.group(3))
+        minute = int(m.group(4))
+        month_map = {
+            "января": 1, "февраля": 2, "марта": 3, "апреля": 4,
+            "мая": 5, "июня": 6, "июля": 7, "августа": 8,
+            "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12
+        }
+        month = month_map[month_str]
+        year = now.year
+        dt = datetime(year, month, day, hour, minute)
+        if dt < now:
+            dt = dt.replace(year=year + 1)
+        return dt
 
-async def receive_reminder_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    time_input = update.message.text
-    reminder_time = dateparser.parse(time_input, settings={'PREFER_DATES_FROM': 'future'})
+    return None
 
-    if not reminder_time or reminder_time <= datetime.now():
-        await update.message.reply_text("⛔ Не удалось распознать время или оно в прошлом. Попробуйте снова.")
-        return SET_REMINDER_TIME
+# --- Обработчик команды /start ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Привет! Напиши время для напоминания, например 'через 5 минут' или '15:30'")
 
-    user_id = update.message.from_user.id
-    text = context.user_data['reminder_text']
-    user_reminders.setdefault(user_id, []).append((text, reminder_time))
+# --- Обработчик текстовых сообщений ---
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    dt = parse_time_string(text)
+    if dt is None:
+        await update.message.reply_text("Не удалось распознать время. Попробуй ещё раз.")
+        return
 
-    # Планирование задачи
-    scheduler.add_job(
-        notify_user,
-        trigger=DateTrigger(run_date=reminder_time),
-        args=[user_id, text]
-    )
+    delta = dt - datetime.now()
+    seconds = delta.total_seconds()
+    if seconds <= 0:
+        await update.message.reply_text("Время уже прошло, попробуй другое.")
+        return
 
-    await update.message.reply_text(f"✅ Напоминание установлено на {reminder_time.strftime('%Y-%m-%d %H:%M')}")
-    return ConversationHandler.END
+    await update.message.reply_text(f"Напоминание установлено на {dt.strftime('%Y-%m-%d %H:%M')}")
 
-async def notify_user(user_id, text):
-    try:
-        await application.bot.send_message(chat_id=user_id, text=f"🔔 Напоминание: {text}")
-    except Exception as e:
-        logging.error(f"Ошибка при отправке напоминания: {e}")
+    # Запланируем отправку напоминания
+    async def reminder():
+        await context.bot.send_message(chat_id=update.message.chat_id, text=f"⏰ Напоминание: {text}")
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Операция отменена.")
-    return ConversationHandler.END
+    # Запускаем отложенный вызов
+    context.application.create_task(asyncio.sleep(seconds))
+    context.application.create_task(asyncio.ensure_future(asyncio.sleep(seconds)))
+    # Лучше использовать JobQueue (но для простоты так)
+    context.application.job_queue.run_once(lambda ctx: asyncio.create_task(reminder()), when=seconds)
 
-# === Flask Webhook ===
+import asyncio
 
-@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
-async def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    await application.process_update(update)
-    return "ok"
+if __name__ == '__main__':
+    # Запускаем Flask в отдельном потоке
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
 
-# === Хендлеры ===
+    # Запускаем бота
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-conv_handler = ConversationHandler(
-    entry_points=[CallbackQueryHandler(handle_start_menu)],
-    states={
-        SET_REMINDER_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_reminder_text)],
-        SET_REMINDER_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_reminder_time)],
-    },
-    fallbacks=[CommandHandler("cancel", cancel)],
-    per_message=True,
-)
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# === Приложение Telegram ===
-application = Application.builder().token(BOT_TOKEN).build()
-application.add_handler(CommandHandler("start", start))
-application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# === Запуск ===
-
-if __name__ == "__main__":
-    import nest_asyncio
-    nest_asyncio.apply()
-
-    async def setup_webhook():
-        webhook_url = f"https://<your-render-subdomain>.onrender.com/webhook/{BOT_TOKEN}"
-        await application.bot.set_webhook(webhook_url)
-        logging.info(f"Webhook установлен: {webhook_url}")
-
-    asyncio.run(setup_webhook())
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    application.run_polling()
 
 
