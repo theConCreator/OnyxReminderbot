@@ -169,10 +169,7 @@ async def get_effect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async def job():
         await context.bot.send_message(user_id, f"{effect} Напоминание: {text}")
 
-    def job_wrapper():
-        asyncio.create_task(job())
-
-    scheduler.add_job(job_wrapper, 'date', run_date=dt)
+    scheduler.add_job(job, 'date', run_date=dt)
     await query.edit_message_text("✅ Напоминание установлено!")
     return ConversationHandler.END
 
