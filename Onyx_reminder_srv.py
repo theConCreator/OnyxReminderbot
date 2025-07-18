@@ -2,6 +2,7 @@ import os
 import logging
 import sqlite3
 import re
+import asyncio
 from datetime import datetime, timedelta
 from telegram import (
     Update,
