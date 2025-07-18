@@ -195,26 +195,26 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
     await msg.reply_text("📝 Ваши напоминания:", reply_markup=kb)
 
-
 # === Main function ===
 
 async def main():
-	init_db()
-	application = Application.builder().token(TOKEN).build()
+    init_db()
+    application = Application.builder().token(TOKEN).build()
 
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CallbackQueryHandler(handle_start_menu))
-application.add_handler(ConversationHandler(
-    entry_points=[CommandHandler("new", new_reminder), MessageHandler(filters.TEXT, get_text)],
-    states={GET_TEXT: [MessageHandler(filters.TEXT, get_text)],
-            GET_TIME: [MessageHandler(filters.TEXT, get_time)],
-            GET_EFFECT: [CallbackQueryHandler(get_effect)]},
-    fallbacks=[],
-))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(handle_start_menu))
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("new", new_reminder), MessageHandler(filters.TEXT, get_text)],
+        states={GET_TEXT: [MessageHandler(filters.TEXT, get_text)],
+                GET_TIME: [MessageHandler(filters.TEXT, get_time)],
+                GET_EFFECT: [CallbackQueryHandler(get_effect)]},
+        fallbacks=[],
+    ))
 
-scheduler.start()
-await application.run_polling()
+    scheduler.start()
+    await application.run_polling()
 
 if __name__ == '__main__':
-	asyncio.run(main())
+    asyncio.run(main())
+
 
