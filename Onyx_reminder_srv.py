@@ -1,99 +1,140 @@
+import os
 import logging
-import threading
-from flask import Flask
+import asyncio
+from flask import Flask, request
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ConversationHandler, ContextTypes, filters
+    Application, CommandHandler, CallbackQueryHandler, ContextTypes,
+    MessageHandler, ConversationHandler, filters
 )
-from apscheduler.schedulers.background import BackgroundScheduler
 
-# Enable logging
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
-logger = logging.getLogger(__name__)
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.date import DateTrigger
 
-# Flask web server to keep Render happy
+import dateparser
+from datetime import datetime
+
+# === Настройки ===
+BOT_TOKEN = os.environ.get("BOT_TOKEN")  # Установи в Render переменную окружения
+
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
 
-@app.route('/')
-def home():
-    return "Бот работает!"
+# === Scheduler ===
+scheduler = AsyncIOScheduler()
+scheduler.start()
 
-def run_web():
-    app.run(host="0.0.0.0", port=10000)
+# === Состояния ConversationHandler ===
+SET_REMINDER_TEXT, SET_REMINDER_TIME = range(2)
 
-# Conversation states
-CHOOSE_ACTION, SET_REMINDER = range(2)
-
-# Dictionary to store reminders (in-memory)
+# Хранилище напоминаний
 user_reminders = {}
+
+# === Команды ===
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("➕ Новое напоминание", callback_data='new')],
-        [InlineKeyboardButton("📋 Мои напоминания", callback_data='list')]
+        [InlineKeyboardButton("➕ Добавить напоминание", callback_data="add")],
+        [InlineKeyboardButton("📋 Мои напоминания", callback_data="list")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Привет! Что вы хотите сделать?", reply_markup=reply_markup)
-    return CHOOSE_ACTION
+    await update.message.reply_text("Привет! Что хочешь сделать?", reply_markup=reply_markup)
 
 async def handle_start_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if query:
         await query.answer()
-        if query.data == 'new':
+        if query.data == "add":
             await query.edit_message_text("Введите текст напоминания:")
-            return SET_REMINDER
-        elif query.data == 'list':
+            return SET_REMINDER_TEXT
+        elif query.data == "list":
             user_id = query.from_user.id
             reminders = user_reminders.get(user_id, [])
-            if not reminders:
-                await query.edit_message_text("У вас нет напоминаний.")
+            if reminders:
+                text = "Ваши напоминания:\n" + "\n".join(
+                    f"🔔 {text} — {time.strftime('%Y-%m-%d %H:%M')}"
+                    for text, time in reminders
+                )
             else:
-                text = "\n".join(f"{i+1}. {r}" for i, r in enumerate(reminders))
-                await query.edit_message_text(f"Ваши напоминания:\n{text}")
-            return ConversationHandler.END
+                text = "У вас пока нет напоминаний."
+            await query.edit_message_text(text)
     return ConversationHandler.END
 
-async def handle_reminder_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def receive_reminder_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['reminder_text'] = update.message.text
+    await update.message.reply_text("⏰ Когда напомнить? (например: 'через 10 минут', 'завтра в 9 утра')")
+    return SET_REMINDER_TIME
+
+async def receive_reminder_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    time_input = update.message.text
+    reminder_time = dateparser.parse(time_input, settings={'PREFER_DATES_FROM': 'future'})
+
+    if not reminder_time or reminder_time <= datetime.now():
+        await update.message.reply_text("⛔ Не удалось распознать время или оно в прошлом. Попробуйте снова.")
+        return SET_REMINDER_TIME
+
     user_id = update.message.from_user.id
-    text = update.message.text
-    user_reminders.setdefault(user_id, []).append(text)
-    await update.message.reply_text(f"✅ Напоминание добавлено: {text}")
-    return ConversationHandler.END
+    text = context.user_data['reminder_text']
+    user_reminders.setdefault(user_id, []).append((text, reminder_time))
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Действие отменено.")
-    return ConversationHandler.END
-
-def main():
-    app_thread = threading.Thread(target=run_web)
-    app_thread.start()
-
-    application = ApplicationBuilder().token("YOUR_BOT_TOKEN").build()
-
-    # Scheduler (можно подключить задачи)
-    scheduler = BackgroundScheduler()
-    scheduler.start()
-
-    # Conversation handler
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            CHOOSE_ACTION: [
-                CallbackQueryHandler(handle_start_menu, pattern='^(new|list)$')
-            ],
-            SET_REMINDER: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_reminder_input)
-            ]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=True
+    # Планирование задачи
+    scheduler.add_job(
+        notify_user,
+        trigger=DateTrigger(run_date=reminder_time),
+        args=[user_id, text]
     )
 
-    application.add_handler(conv_handler)
-    application.run_polling()
+    await update.message.reply_text(f"✅ Напоминание установлено на {reminder_time.strftime('%Y-%m-%d %H:%M')}")
+    return ConversationHandler.END
 
-if __name__ == '__main__':
-    main()
+async def notify_user(user_id, text):
+    try:
+        await application.bot.send_message(chat_id=user_id, text=f"🔔 Напоминание: {text}")
+    except Exception as e:
+        logging.error(f"Ошибка при отправке напоминания: {e}")
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Операция отменена.")
+    return ConversationHandler.END
+
+# === Flask Webhook ===
+
+@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
+async def webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    await application.process_update(update)
+    return "ok"
+
+# === Хендлеры ===
+
+conv_handler = ConversationHandler(
+    entry_points=[CallbackQueryHandler(handle_start_menu)],
+    states={
+        SET_REMINDER_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_reminder_text)],
+        SET_REMINDER_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_reminder_time)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+    per_message=True,
+)
+
+# === Приложение Telegram ===
+application = Application.builder().token(BOT_TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(conv_handler)
+
+# === Запуск ===
+
+if __name__ == "__main__":
+    import nest_asyncio
+    nest_asyncio.apply()
+
+    async def setup_webhook():
+        webhook_url = f"https://<your-render-subdomain>.onrender.com/webhook/{BOT_TOKEN}"
+        await application.bot.set_webhook(webhook_url)
+        logging.info(f"Webhook установлен: {webhook_url}")
+
+    asyncio.run(setup_webhook())
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
