@@ -199,8 +199,8 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === Main function ===
 
 async def main():
-init_db()
-application = Application.builder().token(TOKEN).build()
+	init_db()
+	application = Application.builder().token(TOKEN).build()
 
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CallbackQueryHandler(handle_start_menu))
