@@ -5,15 +5,7 @@ import logging
 import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    CallbackQueryHandler,
-    ConversationHandler,
-    ContextTypes,
-    filters
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, ConversationHandler, ContextTypes, filters
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
 
@@ -169,7 +161,10 @@ async def get_effect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async def job():
         await context.bot.send_message(user_id, f"{effect} Напоминание: {text}")
 
-    scheduler.add_job(job, 'date', run_date=dt)
+    def job_wrapper():
+        asyncio.create_task(job())
+
+    scheduler.add_job(job_wrapper, 'date', run_date=dt)
     await query.edit_message_text("✅ Напоминание установлено!")
     return ConversationHandler.END
 
@@ -190,28 +185,28 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton(f"{text} в {dt.strftime('%H:%M')}", callback_data=f"view_{rid}")]
         for rid, text, dt, effect in rows
     ])
-    await msg.reply_text("📝 Ваши напоминания:", reply_markup=kb)
+    await msg.reply_text
 
 # === Main function ===
 
 async def main():
-    init_db()
-    application = Application.builder().token(TOKEN).build()
+init_db()
+application = Application.builder().token(TOKEN).build()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(handle_start_menu))
-    application.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("new", new_reminder), MessageHandler(filters.TEXT, get_text)],
-        states={GET_TEXT: [MessageHandler(filters.TEXT, get_text)],
-                GET_TIME: [MessageHandler(filters.TEXT, get_time)],
-                GET_EFFECT: [CallbackQueryHandler(get_effect)]},
-        fallbacks=[],
-    ))
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CallbackQueryHandler(handle_start_menu))
+application.add_handler(ConversationHandler(
+    entry_points=[CommandHandler("new", new_reminder), MessageHandler(filters.TEXT, get_text)],
+    states={GET_TEXT: [MessageHandler(filters.TEXT, get_text)],
+            GET_TIME: [MessageHandler(filters.TEXT, get_time)],
+            GET_EFFECT: [CallbackQueryHandler(get_effect)]},
+    fallbacks=[],
+))
 
-    scheduler.start()
-    await application.run_polling()
+scheduler.start()
+await application.run_polling()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+asyncio.run(main())
 
 
