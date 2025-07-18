@@ -2,7 +2,6 @@ import os
 import re
 import sqlite3
 import logging
-import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -197,7 +196,7 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === Main function ===
 
-async def main():
+def main():
     init_db()
     application = Application.builder().token(TOKEN).build()
 
@@ -211,13 +210,12 @@ async def main():
         fallbacks=[],
     ))
 
+    # Start scheduler and polling
     scheduler.start()
-    await application.run_polling()
+    application.run_polling()
 
-if __name__ == '__main__':
-    # Запускаем основной процесс с помощью asyncio.run()
-    asyncio.run(main())
-
+if __name__ == "__main__":
+    main()
 
 
 
