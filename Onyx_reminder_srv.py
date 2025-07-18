@@ -194,7 +194,7 @@ kb = InlineKeyboardMarkup([
 for rid, text, dt, effect in rows
 ])
 await msg.reply_text("📝 Ваши напоминания:", reply_markup=kb)
-=== Main function ===
+# === Main function ===
 
 async def main():
 	init_db()
