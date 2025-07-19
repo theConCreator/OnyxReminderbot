@@ -1,51 +1,79 @@
 import os
 import re
-import asyncio
+import sqlite3
 import logging
+import asyncio
 from datetime import datetime, timedelta
-from threading import Thread
-
-from flask import Flask
-from apscheduler.schedulers.background import BackgroundScheduler
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, filters, ContextTypes, ConversationHandler
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters
 )
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
+import pytz
 
+# === Load env vars ===
 load_dotenv()
-
 TOKEN = os.getenv("BOT_TOKEN")
-PORT = int(os.environ.get("PORT", 10000))
+DB_FILE = "reminders.db"
+TIMEZONE = os.getenv("TIMEZONE", "Europe/Moscow")  # Указываем ваш локальный часовой пояс
 
+# === Logging ===
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# Flask app for fake port binding
-flask_app = Flask(__name__)
+# === Conversation states ===
+GET_TEXT, GET_TIME, GET_EFFECT = range(3)
 
-@flask_app.route('/')
-def home():
-    return "Bot is alive!"
+# === Scheduler ===
+scheduler = AsyncIOScheduler()
 
-def run_flask():
-    flask_app.run(host='0.0.0.0', port=PORT)
+# === Keyboards ===
+start_menu = InlineKeyboardMarkup([
+    [InlineKeyboardButton("📝 Создать напоминание", callback_data="new")],
+    [InlineKeyboardButton("📋 Мои напоминания", callback_data="list")]
+])
 
-# Scheduler
-scheduler = BackgroundScheduler()
-scheduler.start()
+persistent_kb = ReplyKeyboardMarkup(
+    [["📝 Новое", "📋 Список"]],
+    resize_keyboard=True
+)
 
-# In-memory store
-user_reminders = {}
+# === DB init ===
+def init_db():
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                text TEXT,
+                time TEXT,
+                effect TEXT
+            )
+            """
+        )
 
-# States
-ASK_DESCRIPTION, ASK_TIME = range(2)
+# === Save to DB ===
+def save_reminder(user_id, text, iso_time, effect):
+    with sqlite3.connect(DB_FILE) as conn:
+        cur = conn.execute(
+            "INSERT INTO reminders (user_id, text, time, effect) VALUES (?, ?, ?, ?)",
+            (user_id, text, iso_time, effect)
+        )
+        conn.commit()
+        return cur.lastrowid
 
+# === Parse time input ===
 def parse_time_string(s: str) -> datetime | None:
     s = s.strip().lower()
-    now = datetime.now()
+    now = datetime.now(pytz.timezone(TIMEZONE))  # Используем локальное время
 
     patterns = [
         (r"через\s+(\d+)\s*(дней|дня|дн)", 'days'),
@@ -69,87 +97,110 @@ def parse_time_string(s: str) -> datetime | None:
             dt += timedelta(days=1)
         return dt
 
+    m = re.match(r"^(\d{1,2})\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)\s+(\d{1,2}):(\d{2})$", s)
+    if m:
+        day = int(m.group(1))
+        month_str = m.group(2)
+        hour = int(m.group(3))
+        minute = int(m.group(4))
+        month_map = {
+            "января": 1, "февраля": 2, "марта": 3, "апреля": 4,
+            "мая": 5, "июня": 6, "июля": 7, "августа": 8,
+            "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12
+        }
+        month = month_map[month_str]
+        year = now.year
+        dt = datetime(year, month, day, hour, minute, tzinfo=pytz.timezone(TIMEZONE))
+        if dt < now:
+            dt = dt.replace(year=year + 1)
+        return dt
+
     return None
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("➕ Новое напоминание", callback_data="new_reminder")],
-        [InlineKeyboardButton("📋 Мои напоминания", callback_data="list_reminders")]
-    ]
-    await update.message.reply_text(
-        "👋 Добро пожаловать! Выберите действие:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+# === Handlers ===
 
-async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Привет! Что вы хотите сделать?", reply_markup=start_menu)
+
+async def handle_start_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data == "new_reminder":
-        keyboard = [[InlineKeyboardButton("❌ Отмена", callback_data="cancel_creation")]]
-        await query.message.reply_text(
-            "✏️ Введите описание напоминания:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return ASK_DESCRIPTION
-    elif query.data == "list_reminders":
-        user_id = query.from_user.id
-        reminders = user_reminders.get(user_id, [])
-        if not reminders:
-            await query.message.reply_text("🗒 У вас пока нет напоминаний.")
-        else:
-            buttons = [
-                [InlineKeyboardButton(f"🗑 {text}", callback_data=f"del_{i}")]
-                for i, (text, _) in enumerate(reminders)
-            ]
-            await query.message.reply_text("Ваши напоминания:", reply_markup=InlineKeyboardMarkup(buttons))
-        return ConversationHandler.END
-    elif query.data.startswith("del_"):
-        idx = int(query.data.split("_")[1])
-        user_id = query.from_user.id
-        if user_id in user_reminders and idx < len(user_reminders[user_id]):
-            removed = user_reminders[user_id].pop(idx)
-            await query.message.reply_text(f"✅ Напоминание удалено: {removed[0]}")
-        return ConversationHandler.END
-    elif query.data == "cancel_creation":
-        await query.message.reply_text("❌ Создание напоминания отменено.", reply_markup=ReplyKeyboardRemove())
-        return ConversationHandler.END
+    if query.data == "new":
+        return await new_reminder(update, context)
+    return await list_reminders(update, context)
 
-async def receive_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["reminder_text"] = update.message.text
-    await update.message.reply_text("⏰ Теперь укажите время (например, `через 10 минут` или `14:30`):",
-                                    reply_markup=ReplyKeyboardRemove())
-    return ASK_TIME
+async def new_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.callback_query:
+        msg = update.callback_query.message
+    else:
+        msg = update.message
+    await msg.reply_text("✍️ Введите текст напоминания:", reply_markup=persistent_kb)
+    return GET_TEXT
 
-async def receive_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    reminder_text = context.user_data.get("reminder_text")
-    reminder_time = parse_time_string(update.message.text)
-    if not reminder_time:
-        await update.message.reply_text("❗️Не удалось распознать время. Попробуйте снова.")
-        return ASK_TIME
+async def get_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text_input = update.message.text
+    if text_input in ["📋 Список", "📝 Новое"]:
+        return await list_reminders(update, context)
+    context.user_data['text'] = text_input
+    await update.message.reply_text("⏱ Введите время (например, 'через 20 минут', '14:30', '1 июля 13:00'):", reply_markup=persistent_kb)
+    return GET_TIME
 
-    user_id = update.message.from_user.id
-    user_reminders.setdefault(user_id, []).append((reminder_text, reminder_time))
+async def get_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    dt = parse_time_string(update.message.text)
+    if not dt:
+        await update.message.reply_text("❌ Не удалось распознать время. Попробуйте ещё раз:")
+        return GET_TIME
+    context.user_data['time'] = dt
 
-    scheduler.add_job(
-        lambda: asyncio.run(send_reminder(context, user_id, reminder_text)),
-        trigger='date', run_date=reminder_time
-    )
+    effects = ["⏰","📌","🔥","🎯","💡","🚀","✅","📞","🧠"]
+    rows = [[InlineKeyboardButton(e, callback_data=f"effect_{e}") for e in effects[i:i+3]] for i in range(0, len(effects), 3)]
+    kb = InlineKeyboardMarkup(rows)
+    await update.message.reply_text("Выберите эффект:", reply_markup=kb)
+    return GET_EFFECT
 
-    await update.message.reply_text(f"✅ Напоминание установлено: \"{reminder_text}\" в {reminder_time.strftime('%H:%M %d.%m')}")
+async def get_effect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    effect = query.data.split("_", 1)[1]
+    user_id = query.from_user.id
+    text = context.user_data['text']
+    dt = context.user_data['time']
+    iso = dt.isoformat()
+    save_reminder(user_id, text, iso, effect)
+
+    async def job():
+        await context.bot.send_message(user_id, f"{effect} Напоминание: {text}")
+
+    def job_wrapper():
+        asyncio.create_task(job())
+
+    scheduler.add_job(job_wrapper, 'date', run_date=dt)
+    await query.edit_message_text("✅ Напоминание установлено!")
     return ConversationHandler.END
 
-async def send_reminder(context: ContextTypes.DEFAULT_TYPE, user_id: int, text: str):
-    try:
-        await context.bot.send_message(chat_id=user_id, text=f"🔔 Напоминание: {text}")
-    except Exception as e:
-        logging.error(f"Ошибка при отправке напоминания: {e}")
-
-async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🤖 Извините, я не понимаю эту команду.")
+async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.callback_query.message if update.callback_query else update.message
+    if update.callback_query:
+        await update.callback_query.answer()
+    user_id = msg.chat.id
+    now = datetime.now(pytz.timezone(TIMEZONE)).isoformat()  # Локальное время
+    rows = []
+    with sqlite3.connect(DB_FILE) as conn:
+        for rid, text, t, effect in conn.execute("SELECT id,text,time,effect FROM reminders WHERE user_id=? AND time>? ORDER BY time", (user_id, now)):
+            rows.append((rid, text, datetime.fromisoformat(t), effect))
+    if not rows:
+        await msg.reply_text("📭 Напоминаний нет.", reply_markup=start_menu)
+        return ConversationHandler.END
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"{text} в {dt.strftime('%H:%M')}", callback_data=f"view_{rid}")]
+        for rid, text, dt, effect in rows
+    ])
+    await msg.reply_text("📝 Ваши напоминания:", reply_markup=kb)
 
 # === Main function ===
+
 async def main():
-    init_db()
+    init_db()  # Убедитесь, что init_db вызывается после его определения
     application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -166,5 +217,6 @@ async def main():
     await application.run_polling()
 
 if __name__ == '__main__':
+    import asyncio
     asyncio.run(main())  # Запускаем цикл событий с помощью asyncio.run
 
