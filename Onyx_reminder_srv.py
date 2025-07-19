@@ -2,7 +2,6 @@ import os
 import re
 import sqlite3
 import logging
-import asyncio
 from datetime import datetime, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -215,8 +214,8 @@ async def main():
     ))
 
     scheduler.start()
-    await application.run_polling()
+    await application.run_polling()  # Запускаем бота
 
 if __name__ == "__main__":
-    asyncio.run(main())  # Если ваш сервер поддерживает запуск через asyncio.run
+    main()
 
