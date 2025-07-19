@@ -192,31 +192,31 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("📭 Напоминаний нет.", reply_markup=start_menu)
         return ConversationHandler.END
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"{text} в {dt.strftime('%H:%M')}", callback_data=f"view_{rid}")]
-        for rid, text, dt, effect in rows
+        [InlineKeyboardButton(f"❗ {r[1]} - {r[2].strftime('%H:%M %d-%m-%Y')}", callback_data=f"reminder_{r[0]}") for r in rows]
     ])
-    await msg.reply_text("📝 Ваши напоминания:", reply_markup=kb)
-
-# === Main function ===
+    await msg.reply_text("Ваши напоминания:", reply_markup=kb)
+    return ConversationHandler.END
 
 async def main():
-    init_db()  # Убедитесь, что init_db вызывается после его определения
+    # Инициализация бота
     application = Application.builder().token(TOKEN).build()
+    init_db()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(handle_start_menu))
     application.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("new", new_reminder), MessageHandler(filters.TEXT, get_text)],
-        states={GET_TEXT: [MessageHandler(filters.TEXT, get_text)],
-                GET_TIME: [MessageHandler(filters.TEXT, get_time)],
-                GET_EFFECT: [CallbackQueryHandler(get_effect)]},
+        entry_points=[MessageHandler(filters.TEXT, start)],
+        states={
+            GET_TEXT: [MessageHandler(filters.TEXT, get_text)],
+            GET_TIME: [MessageHandler(filters.TEXT, get_time)],
+            GET_EFFECT: [CallbackQueryHandler(get_effect)]
+        },
         fallbacks=[],
     ))
 
     scheduler.start()
     await application.run_polling()
 
-if __name__ == '__main__':
-    import asyncio
-    asyncio.run(main())  # Запускаем цикл событий с помощью asyncio.run
+if __name__ == "__main__":
+    asyncio.run(main())
 
