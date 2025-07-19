@@ -147,30 +147,24 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE, user_id: int, text: 
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🤖 Извините, я не понимаю эту команду.")
 
-def main():
-    Thread(target=run_flask).start()
-
-    application = ApplicationBuilder().token(TOKEN).build()
-
-    conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(handle_menu)],
-        states={
-            ASK_DESCRIPTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_description),
-                CallbackQueryHandler(handle_menu, pattern="^cancel_creation$")
-            ],
-            ASK_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_time)],
-        },
-        fallbacks=[]
-    )
+# === Main function ===
+async def main():
+    init_db()
+    application = Application.builder().token(TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(conv_handler)
-    application.add_handler(CallbackQueryHandler(handle_menu))
-    application.add_handler(MessageHandler(filters.COMMAND, unknown))
+    application.add_handler(CallbackQueryHandler(handle_start_menu))
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler("new", new_reminder), MessageHandler(filters.TEXT, get_text)],
+        states={GET_TEXT: [MessageHandler(filters.TEXT, get_text)],
+                GET_TIME: [MessageHandler(filters.TEXT, get_time)],
+                GET_EFFECT: [CallbackQueryHandler(get_effect)]},
+        fallbacks=[],
+    ))
 
-    application.run_polling()
+    scheduler.start()
+    await application.run_polling()
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    asyncio.run(main())  # Запускаем цикл событий с помощью asyncio.run
 
