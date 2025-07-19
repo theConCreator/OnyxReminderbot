@@ -192,7 +192,7 @@ async def list_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("📭 Напоминаний нет.", reply_markup=start_menu)
         return ConversationHandler.END
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton(f"❗ {r[1]} - {r[2].strftime('%H:%M %d-%m-%Y')}", callback_data=f"reminder_{r[0]}") for r in rows]
+        [InlineKeyboardButton(f"❗ {r[1]} - {r[2].strftime('%H:%M %d-%m-%Y')} ({r[3]})", callback_data=f"reminder_{r[0]}") for r in rows]
     ])
     await msg.reply_text("Ваши напоминания:", reply_markup=kb)
     return ConversationHandler.END
@@ -218,5 +218,5 @@ async def main():
     await application.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main())  # Если ваш сервер поддерживает запуск через asyncio.run
 
